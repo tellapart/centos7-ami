@@ -5,7 +5,8 @@
 
 DEVICE=/dev/xvdb
 ROOTFS=/rootfs
-IXGBEVF_VER=3.1.2
+IXGBEVF_VER=2.16.4
+KERNEL_VER=4.4.21-1.el7.elrepo.x86_64
 
 cat | parted ${DEVICE} << END
 mktable gpt
@@ -16,7 +17,7 @@ quit
 
 
 END
-mkfs.xfs -L root ${DEVICE}2
+mkfs.xfs -f -L root ${DEVICE}2
 mkdir -p $ROOTFS
 mount ${DEVICE}2 $ROOTFS
 
@@ -25,8 +26,13 @@ rpm --root=$ROOTFS --initdb
 rpm --root=$ROOTFS -ivh \
   http://mirror.bytemark.co.uk/centos/7/os/x86_64/Packages/centos-release-7-2.1511.el7.centos.2.10.x86_64.rpm
 # Install necessary packages
+
 yum --installroot=$ROOTFS --nogpgcheck -y groupinstall core
-yum --installroot=$ROOTFS --nogpgcheck -y install openssh-server grub2 acpid tuned kernel deltarpm epel-release
+rpm --root=$ROOTFS -ivh \
+  https://www.elrepo.org/elrepo-release-7.0-2.el7.elrepo.noarch.rpm
+yum --installroot=$ROOTFS --enablerepo=elrepo-kernel --nogpgcheck -y install \
+  kernel-lt-${KERNEL_VER} kernel-lt-devel-${KERNEL_VER}
+yum --installroot=$ROOTFS --nogpgcheck -y install openssh-server grub2 acpid tuned deltarpm epel-release
 yum --installroot=$ROOTFS -C -y remove NetworkManager --setopt="clean_requirements_on_remove=1"
 
 # Create homedir for root
@@ -67,7 +73,7 @@ GRUB_TIMEOUT=1
 GRUB_DEFAULT=saved
 GRUB_DISABLE_SUBMENU=true
 GRUB_TERMINAL_OUTPUT="console"
-GRUB_CMDLINE_LINUX="crashkernel=auto console=ttyS0,115200n8 console=tty0 net.ifnames=0"
+GRUB_CMDLINE_LINUX="crashkernel=auto console=ttyS0,115200n8 console=tty0 net.ifnames=0 intel_pstate=disable"
 GRUB_DISABLE_RECOVERY="true"
 END
 echo 'RUN_FIRSTBOOT=NO' > ${ROOTFS}/etc/sysconfig/firstboot
@@ -142,7 +148,7 @@ cloud_final_modules:
 
 system_info:
   default_user:
-    name: ec2-user
+    name: centos
     lock_passwd: true
     gecos: Cloud User
     groups: [wheel, adm, systemd-journal]
@@ -154,11 +160,6 @@ system_info:
     templates_dir: /etc/cloud/templates
   ssh_svcname: sshd
 
-mounts:
- - [ ephemeral0, /media/ephemeral0 ]
- - [ ephemeral1, /media/ephemeral1 ]
- - [ swap, none, swap, sw, "0", "0" ]
-
 datasource_list: [ Ec2, None ]
 
 # vim:syntax=yaml
@@ -166,7 +167,7 @@ END
 
 # Enable sr-iov
 yum --installroot=$ROOTFS --nogpgcheck -y install dkms make
-curl -L http://sourceforge.net/projects/e1000/files/ixgbevf%20stable/${IXGBEVF_VER}/ixgbevf-${IXGBEVF_VER}.tar.gz/download > /tmp/ixgbevf.tar.gz
+curl -L http://downloads.sourceforge.net/project/e1000/ixgbevf%20stable/${IXGBEVF_VER}/ixgbevf-${IXGBEVF_VER}.tar.gz?r=\&ts=1474038700\&use_mirror=heanet > /tmp/ixgbevf.tar.gz
 tar zxf /tmp/ixgbevf.tar.gz -C ${ROOTFS}/usr/src
 cat > ${ROOTFS}/usr/src/ixgbevf-${IXGBEVF_VER}/dkms.conf << END
 PACKAGE_NAME="ixgbevf"
@@ -179,7 +180,7 @@ DEST_MODULE_LOCATION[0]="/updates"
 DEST_MODULE_NAME[0]="ixgbevf"
 AUTOINSTALL="yes"
 END
-KVER=$(chroot $ROOTFS rpm -q kernel | sed -e 's/^kernel-//')
+KVER=$(chroot $ROOTFS rpm -q kernel-lt | sed -e 's/^kernel-lt-//')
 chroot $ROOTFS dkms add -m ixgbevf -v ${IXGBEVF_VER}
 chroot $ROOTFS dkms build -m ixgbevf -v ${IXGBEVF_VER} -k $KVER
 chroot $ROOTFS dkms install -m ixgbevf -v ${IXGBEVF_VER} -k $KVER
@@ -201,4 +202,3 @@ umount ${ROOTFS}
 
 # Snapshot the volume then create the AMI with:
 # aws ec2 register-image --name 'CentOS-7.0-test' --description 'Unofficial CentOS7 + cloud-init' --virtualization-type hvm --root-device-name /dev/sda1 --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs": { "SnapshotId": "snap-7f042d5f", "VolumeSize":5,  "DeleteOnTermination": true, "VolumeType": "gp2"}}, { "DeviceName":"/dev/xvdb","VirtualName":"ephemeral0"}, { "DeviceName":"/dev/xvdc","VirtualName":"ephemeral1"}]' --architecture x86_64 --sriov-net-support simple
-
